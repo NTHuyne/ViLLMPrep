@@ -1,0 +1,8 @@
+model:
+  api_key: "YOUR-API-KEY"
+  base_url: "base-url"
+  model_name: "model-name"
+  temperature: 0.4
+  provider: openai-compatible
+
+batch_size: 20

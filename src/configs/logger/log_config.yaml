@@ -1,0 +1,38 @@
+version: 1
+disable_existing_loggers: False
+formatters:
+  default:
+    (): 'src.configs.logger.logger_formater.CustomFormatter'
+    fmt: '%(name)s %(levelprefix)s %(asctime)s %(message)s'
+    use_colors: True
+  access:
+    (): 'src.configs.logger.logger_formater.CustomFormatter'
+    fmt: '%(name)s %(levelprefix)s %(asctime)s %(message)s'
+    use_colors: True
+handlers:
+  default:
+    class: logging.StreamHandler
+    formatter: default
+    stream: ext://sys.stderr
+  access:
+    class: logging.StreamHandler
+    formatter: access
+    stream: ext://sys.stdout
+loggers:
+  app:
+    level: DEBUG
+    handlers:
+      - default
+    propagate: False
+  uvicorn:
+    level: DEBUG
+    handlers:
+      - default
+    propagate: False
+  uvicorn.error:
+    level: INFO
+  uvicorn.access:
+    level: DEBUG
+    propagate: False
+    handlers:
+      - access
