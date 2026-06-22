@@ -75,17 +75,6 @@ async def run_pipeline(args: argparse.Namespace) -> None:
     print(f"[INFO] MCQA train: {args.num_mcqa_train}, MCQA test: {args.num_mcqa_test}")
     print(f"[INFO] Output directory: {output_dir}")
 
-    # Build the request object (used for config, but we call steps manually)
-    request = SFTGenerationRequest(
-        generative_model=model,
-        base_url=base_urls[0],
-        chunk_data=chunk_data,
-        num_essay_train_samples=args.num_essay_train,
-        num_mcqa_train_samples=args.num_mcqa_train,
-        num_essay_test_samples=args.num_essay_test,
-        num_mcqa_test_samples=args.num_mcqa_test,
-    )
-
     # ---------------------------------------------------------------
     # Step 1: Keyword extraction
     # ---------------------------------------------------------------
@@ -105,14 +94,9 @@ async def run_pipeline(args: argparse.Namespace) -> None:
         saved = save_intermediate(chunks_with_keywords, output_dir, "keywords")
         print(f"  -> Saved {len(chunks_with_keywords)} keyword results to {saved}")
 
-    # Convert chunks_with_keywords back to the format expected by downstream
-    # (list of dicts with id, content, keywords, domain)
-    # Already in the correct format from synthesize_keyword.
-
     # ---------------------------------------------------------------
     # Step 2: Essay question generation
     # ---------------------------------------------------------------
-    final_data = []
     need_essay = args.num_essay_train > 0 or args.num_essay_test > 0
     if need_essay:
         existing_eq = check_step(output_dir, "essay_questions", "Essay question generation")
@@ -158,9 +142,9 @@ async def run_pipeline(args: argparse.Namespace) -> None:
                 saved = save_intermediate(essay_answers, output_dir, "essay_answers")
                 print(f"  -> Saved {len(essay_answers)} essay answers to {saved}")
 
-            # Convert to ResponseSFTItem dict format
-            for ans in essay_answers:
-                final_data.append({
+            # Convert to dict format (same as ResponseSFTItem)
+            essay_sft_data = [
+                {
                     "question": ans["question"],
                     "answer": ans["answer"],
                     "id": ans["question_id"],
@@ -168,8 +152,13 @@ async def run_pipeline(args: argparse.Namespace) -> None:
                     "domain": ans["domain"],
                     "original_document": ans["chunk_id"],
                     "data_type": ans["data_type"],
-                })
+                }
+                for ans in essay_answers
+            ]
+        else:
+            essay_sft_data = []
     else:
+        essay_sft_data = []
         print("[SKIP] No essay samples requested.")
 
     # ---------------------------------------------------------------
@@ -220,9 +209,9 @@ async def run_pipeline(args: argparse.Namespace) -> None:
                 saved = save_intermediate(mcqa_answers, output_dir, "mcqa_answers")
                 print(f"  -> Saved {len(mcqa_answers)} MCQA answers to {saved}")
 
-            # Convert to ResponseSFTItem dict format
-            for ans in mcqa_answers:
-                final_data.append({
+            # Convert to dict format
+            mcqa_sft_data = [
+                {
                     "question": ans["question"],
                     "answer": ans["answer"],
                     "id": ans["question_id"],
@@ -230,13 +219,19 @@ async def run_pipeline(args: argparse.Namespace) -> None:
                     "domain": ans["domain"],
                     "original_document": ans["chunk_id"],
                     "data_type": ans["data_type"],
-                })
+                }
+                for ans in mcqa_answers
+            ]
+        else:
+            mcqa_sft_data = []
     else:
+        mcqa_sft_data = []
         print("[SKIP] No MCQA samples requested.")
 
     # ---------------------------------------------------------------
     # Step 6: Write final SFT data
     # ---------------------------------------------------------------
+    final_data = essay_sft_data + mcqa_sft_data
     final_path = step_file_path(output_dir, "sft_data")
     with open(final_path, "w", encoding="utf-8") as f:
         json.dump(final_data, f, ensure_ascii=False, indent=4)

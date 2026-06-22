@@ -1,9 +1,15 @@
 import asyncio
+import logging
+import traceback
 from tqdm import tqdm
 from typing import List, Any
 from src.core.openai_calling.client_pool import OpenAIClientPool
 from src.core.prompts.mcqa_answer_generation import MCQA_ANSWER_PROMPT
+from src.core.utils.dump_utils import save_to_tmp
 from src.configs.config import settings
+
+
+logger = logging.getLogger("mcqa_answer_generation")
 
 
 async def process_mcqa_answer(
@@ -34,16 +40,18 @@ async def process_mcqa_answer(
     """
     try:
         if data_type == "train":
-            sample = await openai_client.call_openai([
-                        {
-                            "role": "user",
-                            "content": MCQA_ANSWER_PROMPT.format(
-                                content = content,
-                                question = question,
-                                choice = choice
-                            )
-                        }
-                    ])
+            messages = [
+                {
+                    "role": "user",
+                    "content": MCQA_ANSWER_PROMPT.format(
+                        content = content,
+                        question = question,
+                        choice = choice
+                    )
+                }
+            ]
+            save_to_tmp(messages, f"request_mcqa_answer_{question_id}")
+            sample = await openai_client.call_openai(messages)
             if sample.strip():
                 sample = sample.strip()
         else:
@@ -60,8 +68,9 @@ async def process_mcqa_answer(
         }]
 
     except Exception as e:
-        print(f"Error processing chunk: {e}")
-        raise
+        print(f"Error processing chunk {chunk_id}: {e}")
+        traceback.print_exc()
+        return None
 
 
 async def synthesize_mcqa_answers(
@@ -100,6 +109,8 @@ async def synthesize_mcqa_answers(
     results = []
     for coro in tqdm(asyncio.as_completed(tasks), total=len(tasks), desc="Generating mcqa answer"):
         result = await coro
+        if result is None:
+            continue
         results.extend(result)
 
     return results

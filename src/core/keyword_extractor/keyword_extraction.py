@@ -1,8 +1,10 @@
 import asyncio
+import traceback
 from typing import List, Any
 from tqdm import tqdm
 from src.core.openai_calling.client_pool import OpenAIClientPool
 from src.core.utils.utils import get_items_from_output
+from src.core.utils.dump_utils import save_to_tmp
 from src.core.prompts.keyword_extraction import KEYWORD_GENERATION
 from src.configs.config import settings
 
@@ -32,7 +34,7 @@ async def process_chunk(
                 )
             }
         ]
-        
+        save_to_tmp(messages, f"request_keyword_{chunk_id}")
         sample = await openai_client.call_openai(messages)            
 
         if sample.strip():
@@ -48,8 +50,9 @@ async def process_chunk(
         return chunk_with_keywords
 
     except Exception as e:
-        print(f"Error processing chunk: {e}")
-        raise
+        print(f"Error processing chunk {chunk_id}: {e}")
+        traceback.print_exc()
+        return None
 
 async def synthesize_keyword(
         chunk_data: List[Any], 
@@ -81,6 +84,8 @@ async def synthesize_keyword(
     results = []
     for coro in tqdm(asyncio.as_completed(tasks), total=len(tasks), desc="Extracting keywords"):
         result = await coro
+        if result is None:
+            continue
         results.append(result)
 
     return results

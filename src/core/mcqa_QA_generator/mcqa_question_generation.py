@@ -1,11 +1,13 @@
 import asyncio
 import re
 import random
+import traceback
 from typing import List
 from tqdm import tqdm
 from src.core.openai_calling.client_pool import OpenAIClientPool
 from src.core.prompts.mcqa_question_generation import MCQA_QUESTION_GENERATION_PROMPT
 from src.configs.config import settings
+from src.core.utils.dump_utils import save_to_tmp
 
 async def process_mcqa_question(
         chunk_id,
@@ -28,7 +30,7 @@ async def process_mcqa_question(
     """
     try:
         results = []
-        sample = await openai_client.call_openai([
+        messages = [
             {
                 "role": "user",
                 "content": MCQA_QUESTION_GENERATION_PROMPT.format(
@@ -37,7 +39,9 @@ async def process_mcqa_question(
                     num_questions=num_questions
                 )
             }
-        ])
+        ]
+        save_to_tmp(messages, f"request_mcqa_question_{chunk_id}")
+        sample = await openai_client.call_openai(messages)
         if sample.strip():
             question_matches = re.findall(r'<question>(.*?)</question>', sample, re.DOTALL)
             choice_matches = re.findall(r'<choice>(.*?)</choice>', sample, re.DOTALL)
@@ -59,8 +63,9 @@ async def process_mcqa_question(
         return results
 
     except Exception as e:
-        print(f"Error processing chunk: {e}")
-        raise
+        print(f"Error processing chunk {chunk_id}: {e}")
+        traceback.print_exc()
+        return None
 
 async def synthesize_mcqa_question(
         chunks_list: List[str], 
@@ -99,6 +104,8 @@ async def synthesize_mcqa_question(
     results = []
     for coro in tqdm(asyncio.as_completed(tasks), total=len(tasks), desc="Generating mcqa questions"):
         res = await coro
+        if res is None:
+            continue
         results.extend(res)
             
     # Shuffle results before splitting

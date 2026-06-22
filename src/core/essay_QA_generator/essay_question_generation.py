@@ -1,9 +1,11 @@
 import asyncio
 import random
+import traceback
 from typing import List, Any
 from tqdm import tqdm
 from src.core.openai_calling.client_pool import OpenAIClientPool
 from src.core.utils.utils import get_items_from_output
+from src.core.utils.dump_utils import save_to_tmp
 from src.core.prompts.question_generation import QUESTION_GENERATION
 from src.configs.config import settings
 
@@ -31,7 +33,7 @@ async def process_question(
     """
     try:
         results = []
-        sample = await openai_client.call_openai([
+        messages = [
             {
                 "role": "user",
                 "content": QUESTION_GENERATION.format(
@@ -41,7 +43,9 @@ async def process_question(
                     num_questions=num_questions
                 )
             }
-        ])
+        ]
+        save_to_tmp(messages, f"request_essay_question_{chunk_id}")
+        sample = await openai_client.call_openai(messages)
 
         if sample.strip():
             questions = get_items_from_output(sample)
@@ -59,8 +63,9 @@ async def process_question(
         return results
 
     except Exception as e:
-        print(f"Error processing chunk: {e}")
-        raise
+        print(f"Error processing chunk {chunk_id}: {e}")
+        traceback.print_exc()
+        return None
 
 
 async def synthesize_question(
@@ -100,6 +105,8 @@ async def synthesize_question(
     results = []
     for coro in tqdm(asyncio.as_completed(tasks), total=len(tasks), desc="Generating seed questions"):
         res = await coro
+        if res is None:
+            continue
         results.extend(res)
     
     # Shuffle results before splitting

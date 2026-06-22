@@ -1,9 +1,15 @@
 import asyncio
+import logging
+import traceback
 from typing import Any, List
 from tqdm import tqdm
 from src.core.openai_calling.client_pool import OpenAIClientPool
 from src.core.prompts.DPO_answer_generation import ACCEPT_ANSWER_GENERATION, REJECT_ANSWER_GENERATION
+from src.core.utils.dump_utils import save_to_tmp
 from src.configs.config import settings
+
+
+logger = logging.getLogger("dpo_answer_generation")
 
 
 async def process_answer(
@@ -38,6 +44,7 @@ async def process_answer(
                 )
             }
         ]
+        save_to_tmp(messages, f"request_dpo_rejected_{question_id}")
         sample = await openai_client.call_openai(messages)
 
         if sample.strip():
@@ -53,6 +60,7 @@ async def process_answer(
                 )
             }
         ]
+        save_to_tmp(messages, f"request_dpo_accepted_{question_id}")
         sample = await openai_client.call_openai(messages) 
 
         if sample.strip():
@@ -70,8 +78,9 @@ async def process_answer(
         ]
 
     except Exception as e:
-        print(f"Error processing chunk: {e}")
-        raise
+        print(f"Error processing chunk {chunk_id}: {e}")
+        traceback.print_exc()
+        return None
 
 
 async def synthesize_dpo_answer(
@@ -108,6 +117,8 @@ async def synthesize_dpo_answer(
     results = []
     for coro in tqdm(asyncio.as_completed(tasks), total=len(tasks), desc="Generating answers"):
         res = await coro
+        if res is None:
+            continue
         results.extend(res)
 
     return results
