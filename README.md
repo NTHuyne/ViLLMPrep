@@ -72,57 +72,46 @@ app:
 
 Ngoài ra, script cũng hỗ trợ **JSONL format** (một JSON object trên mỗi dòng).
 
-## Pipeline và cơ chế Resume (phục hồi)
+## Cơ chế Resume
 
-Cả hai script đều có cơ chế **resume tự động**: mỗi bước trong pipeline đều được lưu vào file JSON riêng trong thư mục output. Nếu một bước bị lỗi (do timeout, lỗi API, ...), bạn chỉ cần sửa lỗi và chạy lại cùng lệnh. Script sẽ **bỏ qua các bước đã hoàn thành** và tiếp tục từ bước bị gián đoạn.
+Mỗi bước trong pipeline đều được lưu vào file JSON riêng trong thư mục `--output`. Nếu pipeline bị crash (mất điện, OOM...), **chạy lại cùng lệnh cũ**, script sẽ bỏ qua các bước đã hoàn thành và tiếp tục từ bước bị gián đoạn.
 
-**Các file trung gian được lưu trong thư mục output:**
+**File trung gian trong thư mục output:**
 
-### SFT intermediate files
+| File | Pipeline | Nội dung |
+|------|----------|----------|
+| `keywords.json` | SFT + DPO | Kết quả trích xuất từ khóa |
+| `essay_questions.json` | SFT + DPO | Câu hỏi đã sinh |
+| `essay_answers.json` | SFT | Câu trả lời tự luận |
+| `mcqa_questions.json` | SFT | Câu hỏi trắc nghiệm |
+| `mcqa_answers.json` | SFT | Câu trả lời trắc nghiệm |
+| `dpo_answers.json` | DPO | Cặp accepted + rejected answers |
+| **`sft_data.json`** | SFT | **Kết quả cuối cùng** |
+| **`dpo_data.json`** | DPO | **Kết quả cuối cùng** |
 
-| File | Nội dung |
-|------|----------|
-| `keywords.json` | Kết quả trích xuất từ khóa |
-| `essay_questions.json` | Câu hỏi tự luận đã sinh |
-| `essay_answers.json` | Câu trả lời tự luận đã sinh |
-| `mcqa_questions.json` | Câu hỏi trắc nghiệm đã sinh |
-| `mcqa_answers.json` | Câu trả lời trắc nghiệm đã sinh |
-| **`sft_data.json`** | **Kết quả cuối cùng** |
-
-### DPO intermediate files
-
-| File | Nội dung |
-|------|----------|
-| `keywords.json` | Kết quả trích xuất từ khóa |
-| `essay_questions.json` | Câu hỏi đã sinh |
-| `dpo_answers.json` | Cặp accepted + rejected answers |
-| **`dpo_data.json`** | **Kết quả cuối cùng** |
-
-> **Lưu ý:** Bước đầu tiên (đọc file input) luôn chạy lại từ đầu, các bước sau có thể resume.
+> **Lưu ý:** Bước đọc file input luôn chạy lại từ đầu. Các bước sau có thể resume.
+> 
+> **Lỗi 1 chunk (LLM timeout):** Tự động bỏ qua chunk đó, các chunk khác vẫn chạy bình thường. Request gốc được dump vào `/tmp/villmprep/` để debug.
 
 ## Sinh dữ liệu SFT
 
 Sử dụng script `src/generate_sft_data.py`:
 
 ```bash
-# Cơ bản - dùng model từ llm_config.yaml
+# Cơ bản
 python src/generate_sft_data.py --input chunks.json --output ./sft_output
 
 # Tùy chỉnh số lượng mẫu
 python src/generate_sft_data.py \
-    --input chunks.json \
-    --output ./sft_output \
-    --num-essay-train 20 \
-    --num-essay-test 5 \
-    --num-mcqa-train 10 \
-    --num-mcqa-test 3
+    --input chunks.json --output ./sft_output \
+    --num-essay-train 20 --num-essay-test 5 \
+    --num-mcqa-train 10 --num-mcqa-test 3
 
-# Chỉ định model và base URL (ghi đè llm_config.yaml)
+# Nhiều base URLs (tăng tốc bằng parallel workers)
 python src/generate_sft_data.py \
-    --input chunks.json \
-    --output ./sft_output \
-    --model gpt-4o-mini \
-    --base-url https://api.openai.com/v1
+    --input chunks.json --output ./sft_output \
+    --base-url http://host1:8000/v1 http://host2:8000/v1 \
+    --num-workers 32
 
 # Resume từ lần chạy bị gián đoạn (chạy lại cùng lệnh)
 python src/generate_sft_data.py --input chunks.json --output ./sft_output
@@ -139,23 +128,22 @@ python src/generate_sft_data.py --input chunks.json --output ./sft_output
 | `--num-mcqa-train` | Số mẫu câu hỏi trắc nghiệm cho training | 5 |
 | `--num-mcqa-test` | Số mẫu câu hỏi trắc nghiệm cho test | 0 |
 | `--model` / `-m` | Tên model LLM (ghi đè config) | Từ `llm_config.yaml` |
-| `--base-url` | Endpoint API (ghi đè config) | Từ `llm_config.yaml` |
+| `--base-url` | Endpoint API, có thể truyền nhiều URL (ghi đè config) | Từ `llm_config.yaml` |
+| `--num-workers` | Số luồng concurrent gọi LLM | Từ `llm_config.yaml` |
+| `--input-dir` | Thư mục chứa nhiều file JSON/JSONL (thay cho `--input`) | - |
 
 ## Sinh dữ liệu DPO
 
 Sử dụng script `src/generate_dpo_data.py`:
 
 ```bash
-# Cơ bản - dùng model từ llm_config.yaml
+# Cơ bản
 python src/generate_dpo_data.py --input chunks.json --output ./dpo_output
 
-# Tùy chỉnh số lượng mẫu và model
+# Tùy chỉnh số lượng mẫu
 python src/generate_dpo_data.py \
-    --input chunks.json \
-    --output ./dpo_output \
-    --num-samples 5 \
-    --model gpt-4o-mini \
-    --base-url https://api.openai.com/v1
+    --input chunks.json --output ./dpo_output \
+    --num-samples 5 --model gpt-4o-mini
 
 # Resume từ lần chạy bị gián đoạn (chạy lại cùng lệnh)
 python src/generate_dpo_data.py --input chunks.json --output ./dpo_output
@@ -169,8 +157,11 @@ python src/generate_dpo_data.py --input chunks.json --output ./dpo_output
 | `--output` / `-o` | Đường dẫn thư mục output (không phải file) | **Bắt buộc** |
 | `--num-samples` | Số mẫu DPO cần sinh | 2 |
 | `--model` / `-m` | Tên model LLM (ghi đè config) | Từ `llm_config.yaml` |
-| `--base-url` | Endpoint API (ghi đè config) | Từ `llm_config.yaml` |
-### Cấu trúc thư mục output sau khi chạy SFT
+| `--base-url` | Endpoint API, có thể truyền nhiều URL (ghi đè config) | Từ `llm_config.yaml` |
+| `--num-workers` | Số luồng concurrent gọi LLM | Từ `llm_config.yaml` |
+| `--input-dir` | Thư mục chứa nhiều file JSON/JSONL (thay cho `--input`) | - |
+
+### Cấu trúc thư mục output
 
 ```
 ./sft_output/
@@ -182,7 +173,7 @@ python src/generate_dpo_data.py --input chunks.json --output ./dpo_output
 └── sft_data.json          # Kết quả cuối cùng
 ```
 
-### Cấu trúc thư mục output sau khi chạy DPO
+### Cấu trúc thư mục output DPO
 
 ```
 ./dpo_output/
@@ -227,17 +218,16 @@ python src/generate_dpo_data.py --input chunks.json --output ./dpo_output
 
 ## Chạy test
 
-Các file test nằm trong `src/test/`:
-
 ```bash
-# Test SFT
+# Test cơ chế dump request + error handling (không cần API key)
+python -m pytest src/test/test_dump_and_error_handling.py -v
+
+# Test SFT (gọi API thực tế, cần API key)
 python -m src.test.test_sft_generation_service
 
-# Test DPO
+# Test DPO (gọi API thực tế, cần API key)
 python -m src.test.test_dpo_generation_service
 ```
-
-> **Lưu ý:** Các test này gọi API thực tế, cần cấu hình API key hợp lệ trong `settings/llm_config.yaml`.
 
 ## Kiến trúc thư mục
 
