@@ -30,10 +30,12 @@ from src.schemas.schemas import DPOGenerationRequest
 from src.configs.config import settings
 from src.generate_utils import (
     load_chunks,
+    load_chunks_from_dir,
     save_intermediate,
     check_step,
     step_file_path,
 )
+from src.core.openai_calling.client_pool import normalize_base_urls
 
 
 async def run_pipeline(args: argparse.Namespace) -> None:
@@ -42,19 +44,29 @@ async def run_pipeline(args: argparse.Namespace) -> None:
     os.makedirs(output_dir, exist_ok=True)
 
     # --- Step 0: Load input (always required, never skipped) ---
-    print(f"[INFO] Loading chunks from: {args.input}")
-    chunk_data = load_chunks(args.input)
+    if args.input:
+        print(f"[INFO] Loading chunks from: {args.input}")
+        chunk_data = load_chunks(args.input)
+    else:
+        print(f"[INFO] Loading chunks from directory: {args.input_dir}")
+        chunk_data = load_chunks_from_dir(args.input_dir)
     print(f"[INFO] Loaded {len(chunk_data)} chunk(s)")
     if not chunk_data:
-        print("[ERROR] No chunks found in input file.")
+        print("[ERROR] No chunks found in input.")
         sys.exit(1)
 
     # Determine model / base_url
     model = args.model or settings.MODEL_CONF.get("model_name")
-    base_url = args.base_url or settings.MODEL_CONF.get("base_url")
+    if args.base_url:
+        base_urls = normalize_base_urls(args.base_url)
+    else:
+        base_urls = normalize_base_urls(settings.MODEL_CONF.get("base_url"))
+    num_workers = args.num_workers
+    per_url_workers = max(1, num_workers // len(base_urls))
 
     print(f"[INFO] Model: {model}")
-    print(f"[INFO] Base URL: {base_url}")
+    print(f"[INFO] Base URLs ({len(base_urls)}): {base_urls}")
+    print(f"[INFO] Workers: {num_workers} total ({per_url_workers} per URL)")
     print(f"[INFO] Number of DPO samples: {args.num_samples}")
     print(f"[INFO] Output directory: {output_dir}")
 
@@ -71,7 +83,8 @@ async def run_pipeline(args: argparse.Namespace) -> None:
         chunks_with_keywords = await synthesize_keyword(
             chunk_data,
             llm_model=model,
-            base_url=base_url,
+            base_url=base_urls,
+            num_workers=num_workers,
         )
         saved = save_intermediate(chunks_with_keywords, output_dir, "keywords")
         print(f"  -> Saved {len(chunks_with_keywords)} keyword results to {saved}")
@@ -95,7 +108,8 @@ async def run_pipeline(args: argparse.Namespace) -> None:
                 total_num_questions=args.num_samples,
                 train_test_ratio=1,
                 llm_model=model,
-                base_url=base_url,
+                base_url=base_urls,
+                num_workers=num_workers,
             )
             saved = save_intermediate(essay_questions, output_dir, "essay_questions")
             print(f"  -> Saved {len(essay_questions)} questions to {saved}")
@@ -115,7 +129,8 @@ async def run_pipeline(args: argparse.Namespace) -> None:
             dpo_answers = await synthesize_dpo_answer(
                 essay_questions,
                 llm_model=model,
-                base_url=base_url,
+                base_url=base_urls,
+                num_workers=num_workers,
             )
             saved = save_intermediate(dpo_answers, output_dir, "dpo_answers")
             print(f"  -> Saved {len(dpo_answers)} DPO answer pairs to {saved}")
@@ -161,6 +176,13 @@ Examples:
   python src/generate_dpo_data.py --input chunks.json --output ./dpo_output \\
       --num-samples 5 --model gpt-4o-mini --base-url https://api.openai.com/v1
 
+  # Load from a directory of JSON/JSONL files
+  python src/generate_dpo_data.py --input-dir ./chunks_dir --output ./dpo_output
+
+  # Multiple base URLs with parallel workers
+  python src/generate_dpo_data.py --input chunks.json --output ./dpo_output \\
+      --base-url http://host1:8000/v1,http://host2:8000/v1 --num-workers 32
+
   # Resume from interrupted run (just re-run the same command)
   python src/generate_dpo_data.py --input chunks.json --output ./dpo_output
         """,
@@ -169,8 +191,14 @@ Examples:
     parser.add_argument(
         "--input", "-i",
         type=str,
-        required=True,
+        default=None,
         help="Path to input JSON/JSONL file containing chunk data.",
+    )
+    parser.add_argument(
+        "--input-dir",
+        type=str,
+        default=None,
+        help="Directory containing JSON/JSONL chunk files (same format as --input).",
     )
     parser.add_argument(
         "--output", "-o",
@@ -193,10 +221,22 @@ Examples:
     parser.add_argument(
         "--base-url",
         type=str,
+        nargs="+",
         default=None,
-        help="LLM API base URL (overrides llm_config.yaml).",
+        help="LLM API base URL(s). Space- or comma-separated (overrides llm_config.yaml).",
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=settings.LLM_CONFIG_YML["batch_size"],
+        help=f"Total concurrent LLM requests, split evenly across base URLs (default: {settings.LLM_CONFIG_YML['batch_size']}).",
+    )
+    args = parser.parse_args()
+
+    if bool(args.input) == bool(args.input_dir):
+        parser.error("Exactly one of --input or --input-dir must be provided.")
+
+    return args
 
 
 def main() -> None:

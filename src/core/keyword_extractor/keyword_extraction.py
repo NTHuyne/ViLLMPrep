@@ -1,7 +1,7 @@
 import asyncio
 from typing import List, Any
 from tqdm import tqdm
-from src.core.openai_calling.call_openai import OpenAIGenerator
+from src.core.openai_calling.client_pool import OpenAIClientPool
 from src.core.utils.utils import get_items_from_output
 from src.core.prompts.keyword_extraction import KEYWORD_GENERATION
 from src.configs.config import settings
@@ -53,7 +53,7 @@ async def process_chunk(
 
 async def synthesize_keyword(
         chunk_data: List[Any], 
-        batch_size=settings.LLM_CONFIG_YML['batch_size'], 
+        num_workers=settings.LLM_CONFIG_YML['batch_size'], 
         llm_model=settings.MODEL_CONF['model_name'], 
         base_url=settings.MODEL_CONF['base_url']
         ):
@@ -62,11 +62,13 @@ async def synthesize_keyword(
 
     Args:
         chunk_data: List of dictionaries containing chunk_id, content, domain
-        batch_size: Number of chunks to process in concurrent batches
+        num_workers: Total concurrent requests across all base URLs
     Returns:
         List of dictionaries containing chunk_id, content, keywords
     """
-    openai_client = OpenAIGenerator(llm_model=llm_model, base_url=base_url)
+    openai_client = OpenAIClientPool(
+        llm_model=llm_model, base_urls=base_url, num_workers=num_workers
+    )
 
     tasks = [
         process_chunk(
@@ -76,11 +78,9 @@ async def synthesize_keyword(
         for chunk in chunk_data
     ]
 
-    # Process in batches
     results = []
-    for i in tqdm(range(0, len(tasks), batch_size), desc="Extracting keywords"):
-        batch_tasks = tasks[i:i+batch_size]
-        batch_results = await asyncio.gather(*batch_tasks)
-        results.extend(batch_results)
+    for coro in tqdm(asyncio.as_completed(tasks), total=len(tasks), desc="Extracting keywords"):
+        result = await coro
+        results.append(result)
 
     return results
