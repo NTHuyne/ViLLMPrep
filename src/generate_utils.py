@@ -79,6 +79,21 @@ def load_chunks(input_path: str) -> list[ChunkItem]:
     return chunks
 
 
+def load_chunks_from_dir(input_dir: str) -> list[ChunkItem]:
+    """
+    Load chunk data from all JSON/JSONL files in a directory.
+
+    Files are processed in sorted order and concatenated.
+    """
+    chunks = []
+    for name in sorted(os.listdir(input_dir)):
+        if name.lower().endswith((".json", ".jsonl")):
+            file_path = os.path.join(input_dir, name)
+            if os.path.isfile(file_path):
+                chunks.extend(load_chunks(file_path))
+    return chunks
+
+
 def check_step(output_dir: str, step_name: str, description: str) -> Optional[Any]:
     """
     Check if a step is already completed. If yes, load and return its data.

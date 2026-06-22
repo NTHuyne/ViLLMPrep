@@ -1,7 +1,7 @@
 import asyncio
 from tqdm import tqdm
 from typing import List, Any
-from src.core.openai_calling.call_openai import OpenAIGenerator
+from src.core.openai_calling.client_pool import OpenAIClientPool
 from src.core.prompts.mcqa_answer_generation import MCQA_ANSWER_PROMPT
 from src.configs.config import settings
 
@@ -66,7 +66,7 @@ async def process_mcqa_answer(
 
 async def synthesize_mcqa_answers(
         questions: List[Any], 
-        batch_size=settings.LLM_CONFIG_YML['batch_size'], 
+        num_workers=settings.LLM_CONFIG_YML['batch_size'], 
         llm_model=settings.MODEL_CONF['model_name'], 
         base_url=settings.MODEL_CONF['base_url']
         ):
@@ -75,10 +75,12 @@ async def synthesize_mcqa_answers(
     
     Args:
         questions: List of dictionaries containing chunk_id, question_id, content, question, choice, domain, question_type
-        batch_size: Number of questions to process in concurrent batches
+        num_workers: Total concurrent requests across all base URLs
     Returns:
         List of dictionaries containing chunk_id, question_id, domain, question, answer, question_type"""
-    openai_client = OpenAIGenerator(llm_model=llm_model, base_url=base_url)
+    openai_client = OpenAIClientPool(
+        llm_model=llm_model, base_urls=base_url, num_workers=num_workers
+    )
 
     tasks = [
         process_mcqa_answer(
@@ -95,12 +97,9 @@ async def synthesize_mcqa_answers(
         for question in questions
     ]
 
-    # Process in batches
     results = []
-    for i in tqdm(range(0, len(tasks), batch_size), desc="Generating mcqa answer"):
-        batch_tasks = tasks[i:i+batch_size]
-        batch_results = await asyncio.gather(*batch_tasks)
-        for result in batch_results:
-            results.extend(result)
+    for coro in tqdm(asyncio.as_completed(tasks), total=len(tasks), desc="Generating mcqa answer"):
+        result = await coro
+        results.extend(result)
 
     return results

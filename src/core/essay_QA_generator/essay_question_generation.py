@@ -2,7 +2,7 @@ import asyncio
 import random
 from typing import List, Any
 from tqdm import tqdm
-from src.core.openai_calling.call_openai import OpenAIGenerator
+from src.core.openai_calling.client_pool import OpenAIClientPool
 from src.core.utils.utils import get_items_from_output
 from src.core.prompts.question_generation import QUESTION_GENERATION
 from src.configs.config import settings
@@ -67,7 +67,7 @@ async def synthesize_question(
         chunks_list: List[Any], 
         total_num_questions: int, 
         train_test_ratio: float, 
-        batch_size=settings.LLM_CONFIG_YML['batch_size'], 
+        num_workers=settings.LLM_CONFIG_YML['batch_size'], 
         llm_model=settings.MODEL_CONF['model_name'], 
         base_url=settings.MODEL_CONF['base_url']
         ):
@@ -77,12 +77,14 @@ async def synthesize_question(
     Args:
         chunks_list: List of dictionaries containing chunk_id, content, domain, keywords
         total_num_questions: Total number of questions to generate
-        batch_size: Number of chunks to process in concurrent batches
+        num_workers: Total concurrent requests across all base URLs
         train_test_ratio: Ratio of train to test data
     Returns:
         List of dictionaries containing chunk_id, question_id, domain, question, question_type, data_type
     """
-    openai_client = OpenAIGenerator(llm_model, base_url=base_url)
+    openai_client = OpenAIClientPool(
+        llm_model=llm_model, base_urls=base_url, num_workers=num_workers
+    )
 
     num_questions_per_chunk = max(1, round(total_num_questions / len(chunks_list)))
 
@@ -95,13 +97,10 @@ async def synthesize_question(
         for chunk in chunks_list
     ]
 
-    # Process in batches
     results = []
-    for i in tqdm(range(0, len(tasks), batch_size), desc="Generating seed questions"):
-        batch_tasks = tasks[i:i + batch_size]
-        batch_results = await asyncio.gather(*batch_tasks)
-        for res in batch_results:
-            results.extend(res)
+    for coro in tqdm(asyncio.as_completed(tasks), total=len(tasks), desc="Generating seed questions"):
+        res = await coro
+        results.extend(res)
     
     # Shuffle results before splitting
     random.shuffle(results)
